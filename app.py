@@ -1,20 +1,27 @@
-from flask import Flask, render_template_string, request, redirect, url_for, session, flash, jsonify
+import streamlit as st
 import sqlite3
+import pandas as pd
 from datetime import datetime
-import os
+import plotly.express as px
+import plotly.graph_objects as go
 
-app = Flask(__name__)
-app.secret_key = 'school-lms-secret-key-2024'
+# Page config
+st.set_page_config(
+    page_title="School LMS",
+    page_icon="🏫",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# Database initialization
+# Database setup
 DB_PATH = 'school_lms.db'
 
+@st.cache_resource
 def init_db():
     """Initialize database with all required tables"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Students table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS students (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -26,7 +33,6 @@ def init_db():
         )
     ''')
     
-    # Teachers table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS teachers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,7 +43,6 @@ def init_db():
         )
     ''')
     
-    # Fees table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS fees (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52,7 +57,6 @@ def init_db():
         )
     ''')
     
-    # Salary table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS salary (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,366 +74,326 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Hardcoded admin credentials (for demo)
-ADMIN_CREDENTIALS = {
-    'username': 'admin',
-    'password': 'admin123'
-}
-
-# CSS Styles
-CSS_STYLES = """
-<style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; }
-    .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
-    .navbar { background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); padding: 1rem 0; margin-bottom: 2rem; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
-    .nav-links { display: flex; gap: 2rem; list-style: none; justify-content: center; }
-    .nav-links a { text-decoration: none; color: #333; font-weight: 500; padding: 0.5rem 1rem; border-radius: 25px; transition: all 0.3s; }
-    .nav-links a:hover { background: #667eea; color: white; transform: translateY(-2px); }
-    .card { background: white; border-radius: 15px; padding: 2rem; box-shadow: 0 10px 30px rgba(0,0,0,0.1); margin-bottom: 2rem; }
-    .form-group { margin-bottom: 1.5rem; }
-    label { display: block; margin-bottom: 0.5rem; font-weight: 600; color: #333; }
-    input, select { width: 100%; padding: 12px; border: 2px solid #e1e5e9; border-radius: 8px; font-size: 16px; transition: border-color 0.3s; }
-    input:focus, select:focus { outline: none; border-color: #667eea; }
-    .btn { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 12px 24px; border: none; border-radius: 8px; cursor: pointer; font-size: 16px; font-weight: 600; transition: transform 0.3s; }
-    .btn:hover { transform: translateY(-2px); }
-    .btn-danger { background: linear-gradient(135deg, #ff6b6b 0%, #ee5a52 100%); }
-    .btn-success { background: linear-gradient(135deg, #51cf66 0%, #40c057 100%); }
-    .table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
-    .table th, .table td { padding: 12px; text-align: left; border-bottom: 1px solid #e1e5e9; }
-    .table th { background: #f8f9fa; font-weight: 600; }
-    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1.5rem; margin-bottom: 2rem; }
-    .stat-card { background: white; padding: 2rem; border-radius: 15px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
-    .stat-number { font-size: 2.5rem; font-weight: bold; color: #667eea; }
-    .stat-label { color: #666; font-size: 1.1rem; margin-top: 0.5rem; }
-    .alert { padding: 1rem; border-radius: 8px; margin-bottom: 1rem; }
-    .alert-success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-    .alert-danger { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-    .logout { position: absolute; top: 1rem; right: 2rem; }
-</style>
-"""
-
-# Navigation HTML
-NAVBAR = """
-<nav class="navbar">
-    <div class="container">
-        <ul class="nav-links">
-            <li><a href="{{ url_for('dashboard') }}">🏠 Dashboard</a></li>
-            <li><a href="{{ url_for('students') }}">👨‍🎓 Students</a></li>
-            <li><a href="{{ url_for('teachers') }}">👨‍🏫 Teachers</a></li>
-            <li><a href="{{ url_for('fees') }}">💰 Fees</a></li>
-            <li><a href="{{ url_for('salary') }}">💼 Salary</a></li>
-        </ul>
-        {% if session.get('logged_in') %}
-        <a href="{{ url_for('logout') }}" class="logout btn btn-danger">Logout</a>
-        {% endif %}
-    </div>
-</nav>
-"""
-
 def get_db_connection():
-    """Get database connection"""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
-def login_required(f):
-    """Decorator to check if user is logged in"""
-    from functools import wraps
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if not session.get('logged_in'):
-            flash('Please login first!', 'error')
-            return redirect(url_for('login'))
-        return f(*args, **kwargs)
-    return decorated_function
+# Admin login
+if 'logged_in' not in st.session_state:
+    st.session_state.logged_in = False
 
-@app.route('/login', methods=['GET', 'POST'])
 def login():
-    if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
-        
-        if username == ADMIN_CREDENTIALS['username'] and password == ADMIN_CREDENTIALS['password']:
-            session['logged_in'] = True
-            flash('Login successful!', 'success')
-            return redirect(url_for('dashboard'))
-        else:
-            flash('Invalid credentials!', 'error')
+    st.title("🔐 School LMS Login")
+    col1, col2 = st.columns([1, 2])
     
-    return render_template_string(f"""
-    {CSS_STYLES}
-    <div class="container" style="max-width: 400px; margin-top: 100px;">
-        <div class="card">
-            <h2 style="text-align: center; margin-bottom: 2rem; color: #333;">🔐 School LMS Login</h2>
-            {% with messages = get_flashed_messages(with_categories=true) %}
-                {% if messages %}
-                    {% for category, message in messages %}
-                        <div class="alert alert-{{ 'success' if category == 'success' else 'danger' }}">{{ message }}</div>
-                    {% endfor %}
-                {% endif %}
-            {% endwith %}
-            <form method="POST">
-                <div class="form-group">
-                    <label>Username</label>
-                    <input type="text" name="username" required value="admin">
-                </div>
-                <div class="form-group">
-                    <label>Password</label>
-                    <input type="password" name="password" required value="admin123">
-                </div>
-                <button type="submit" class="btn" style="width: 100%;">Login</button>
-            </form>
-            <p style="text-align: center; margin-top: 1rem; color: #666;">
-                Demo: admin / admin123
-            </p>
-        </div>
-    </div>
-    """)
+    with col1:
+        username = st.text_input("Username", value="admin")
+        password = st.text_input("Password", type="password", value="admin123")
+        if st.button("Login 🚀", use_container_width=True):
+            if username == "admin" and password == "admin123":
+                st.session_state.logged_in = True
+                st.success("Login successful! 🎉")
+                st.rerun()
+            else:
+                st.error("Invalid credentials! ❌")
+                st.info("Demo: admin / admin123")
+    
+    with col2:
+        st.markdown("""
+        ## 📚 School Management System
+        **Features:**
+        - 👨‍🎓 Student Management
+        - 👨‍🏫 Teacher Management  
+        - 💰 Fee Management
+        - 💼 Salary Management
+        - 📊 Analytics Dashboard
+        """)
 
-@app.route('/logout')
-def logout():
-    session.clear()
-    flash('Logged out successfully!', 'success')
-    return redirect(url_for('login'))
+if not st.session_state.logged_in:
+    login()
+    st.stop()
 
-@app.route('/')
-@app.route('/dashboard')
-@login_required
+# Initialize DB
+init_db()
+
+# Sidebar
+st.sidebar.title("🏫 School LMS")
+st.sidebar.markdown("---")
+
+# Custom CSS
+st.markdown("""
+<style>
+    .main-header { font-size: 3rem; color: #1f77b4; text-align: center; margin-bottom: 2rem; }
+    .metric-card { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 1rem; border-radius: 10px; text-align: center; }
+    .stButton > button { width: 100%; height: 2.5rem; border-radius: 10px; font-weight: bold; }
+</style>
+""", unsafe_allow_html=True)
+
+# Main App
 def dashboard():
+    st.markdown('<h1 class="main-header">📊 School Dashboard</h1>', unsafe_allow_html=True)
+    
     conn = get_db_connection()
     
     # Stats
+    col1, col2, col3, col4 = st.columns(4)
+    
     total_students = conn.execute('SELECT COUNT(*) FROM students').fetchone()[0]
     total_teachers = conn.execute('SELECT COUNT(*) FROM teachers').fetchone()[0]
-    total_fees_collected = conn.execute(
-        "SELECT SUM(amount) FROM fees WHERE status = 'paid'"
-    ).fetchone()[0] or 0
-    pending_fees = conn.execute(
-        "SELECT SUM(amount) FROM fees WHERE status = 'unpaid'"
-    ).fetchone()[0] or 0
+    total_fees = conn.execute("SELECT SUM(amount) FROM fees WHERE status = 'paid'").fetchone()[0] or 0
+    pending_fees = conn.execute("SELECT SUM(amount) FROM fees WHERE status = 'unpaid'").fetchone()[0] or 0
+    
+    with col1:
+        st.markdown(f"""
+        <div class="metric-card">
+            <h2 style='font-size: 2.5rem; margin: 0;'>{total_students}</h2>
+            <p style='margin: 0;'>👨‍🎓 Students</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown(f"""
+        <div class="metric-card">
+            <h2 style='font-size: 2.5rem; margin: 0;'>{total_teachers}</h2>
+            <p style='margin: 0;'>👨‍🏫 Teachers</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown(f"""
+        <div class="metric-card">
+            <h2 style='font-size: 2.5rem; margin: 0;'>₹{total_fees:,.0f}</h2>
+            <p style='margin: 0;'>💰 Collected</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col4:
+        st.markdown(f"""
+        <div class="metric-card">
+            <h2 style='font-size: 2.5rem; margin: 0;'>₹{pending_fees:,.0f}</h2>
+            <p style='margin: 0;'>⏳ Pending</p>
+        </div>
+        """, unsafe_allow_html=True)
     
     conn.close()
-    
-    return render_template_string(f"""
-    {CSS_STYLES}
-    {NAVBAR}
-    <div class="container">
-        <div class="card">
-            <h1 style="color: #333; margin-bottom: 2rem;">📊 School Management Dashboard</h1>
-            
-            {% with messages = get_flashed_messages(with_categories=true) %}
-                {% if messages %}
-                    {% for category, message in messages %}
-                        <div class="alert alert-{{ 'success' if category == 'success' else 'danger' }}">{{ message }}</div>
-                    {% endfor %}
-                {% endif %}
-            {% endwith %}
-            
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-number">{total_students}</div>
-                    <div class="stat-label">Total Students</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-number">{total_teachers}</div>
-                    <div class="stat-label">Total Teachers</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-number">₹{total_fees_collected:,.2f}</div>
-                    <div class="stat-label">Fees Collected</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-number">₹{pending_fees:,.2f}</div>
-                    <div class="stat-label">Pending Fees</div>
-                </div>
-            </div>
-        </div>
-    </div>
-    """, total_students=total_students, total_teachers=total_teachers, 
-         total_fees_collected=total_fees_collected, pending_fees=pending_fees)
 
-@app.route('/students', methods=['GET', 'POST'])
-@login_required
-def students():
+def students_page():
+    st.header("👨‍🎓 Student Management")
+    
+    # Add Student
+    with st.expander("➕ Add New Student", expanded=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            name = st.text_input("Name")
+            class_name = st.text_input("Class", placeholder="10A")
+        with col2:
+            section = st.text_input("Section")
+            parent_name = st.text_input("Parent Name")
+        
+        if st.button("Add Student", use_container_width=True):
+            if name and class_name:
+                conn = get_db_connection()
+                conn.execute('INSERT INTO students (name, class_name, section, parent_name) VALUES (?, ?, ?, ?)',
+                           (name, class_name, section or "N/A", parent_name or "N/A"))
+                conn.commit()
+                conn.close()
+                st.success("Student added! 🎉")
+                st.rerun()
+    
+    # Students Table
     conn = get_db_connection()
-    
-    if request.method == 'POST':
-        conn.execute('''
-            INSERT INTO students (name, class_name, section, parent_name)
-            VALUES (?, ?, ?, ?)
-        ''', (request.form['name'], request.form['class_name'], 
-              request.form['section'], request.form['parent_name']))
-        conn.commit()
-        flash('Student added successfully!', 'success')
-    
-    if request.args.get('delete'):
-        conn.execute('DELETE FROM students WHERE id = ?', (request.args['delete'],))
-        conn.commit()
-        flash('Student deleted successfully!', 'success')
-    
-    students = conn.execute('''
-        SELECT * FROM students ORDER BY created_at DESC
-    ''').fetchall()
+    students_df = pd.read_sql_query("SELECT * FROM students ORDER BY created_at DESC", conn)
     conn.close()
     
-    return render_template_string(f"""
-    {CSS_STYLES}
-    {NAVBAR}
-    <div class="container">
-        <div class="card">
-            <h2>👨‍🎓 Student Management</h2>
-            
-            {% with messages = get_flashed_messages(with_categories=true) %}
-                {% if messages %}
-                    {% for category, message in messages %}
-                        <div class="alert alert-{{ 'success' if category == 'success' else 'danger' }}">{{ message }}</div>
-                    {% endfor %}
-                {% endif %}
-            {% endwith %}
-            
-            <!-- Add Student Form -->
-            <form method="POST" style="margin-bottom: 2rem; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
-                <div class="form-group">
-                    <label>Name</label>
-                    <input type="text" name="name" required>
-                </div>
-                <div class="form-group">
-                    <label>Class</label>
-                    <input type="text" name="class_name" required placeholder="e.g., 10A">
-                </div>
-                <div class="form-group">
-                    <label>Section</label>
-                    <input type="text" name="section" required>
-                </div>
-                <div class="form-group">
-                    <label>Parent Name</label>
-                    <input type="text" name="parent_name" required>
-                </div>
-                <button type="submit" class="btn">➕ Add Student</button>
-            </form>
-            
-            <!-- Students Table -->
-            <table class="table">
-                <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>Name</th>
-                        <th>Class</th>
-                        <th>Section</th>
-                        <th>Parent</th>
-                        <th>Date Added</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for student in students %}
-                    <tr>
-                        <td>{{ student['id'] }}</td>
-                        <td>{{ student['name'] }}</td>
-                        <td>{{ student['class_name'] }}</td>
-                        <td>{{ student['section'] }}</td>
-                        <td>{{ student['parent_name'] }}</td>
-                        <td>{{ student['created_at'][:10] }}</td>
-                        <td>
-                            <a href="?delete={{ student['id'] }}" 
-                               class="btn btn-danger" 
-                               style="padding: 6px 12px; font-size: 14px;"
-                               onclick="return confirm('Delete {{ student['name'] }}?')">🗑️ Delete</a>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </div>
-    """, students=students)
+    if not students_df.empty:
+        st.subheader(f"📋 {len(students_df)} Students")
+        st.dataframe(students_df, use_container_width=True)
+        
+        # Delete functionality
+        st.warning("⚠️ Select students to delete:")
+        selected = st.multiselect("Select Student IDs to delete:", students_df['id'].tolist())
+        if st.button("🗑️ Delete Selected", type="primary", use_container_width=True) and selected:
+            conn = get_db_connection()
+            for student_id in selected:
+                conn.execute('DELETE FROM students WHERE id = ?', (student_id,))
+            conn.commit()
+            conn.close()
+            st.success(f"Deleted {len(selected)} students!")
+            st.rerun()
+    else:
+        st.info("No students found. Add some! 👆")
 
-@app.route('/teachers', methods=['GET', 'POST'])
-@login_required
-def teachers():
+def teachers_page():
+    st.header("👨‍🏫 Teacher Management")
+    
+    # Add Teacher
+    with st.expander("➕ Add New Teacher", expanded=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            name = st.text_input("Name")
+            subject = st.text_input("Subject")
+        with col2:
+            phone = st.text_input("Phone")
+        
+        if st.button("Add Teacher", use_container_width=True):
+            if name and subject:
+                conn = get_db_connection()
+                conn.execute('INSERT INTO teachers (name, subject, phone) VALUES (?, ?, ?)',
+                           (name, subject, phone or None))
+                conn.commit()
+                conn.close()
+                st.success("Teacher added! 🎉")
+                st.rerun()
+    
+    # Teachers Table
     conn = get_db_connection()
-    
-    if request.method == 'POST':
-        conn.execute('''
-            INSERT INTO teachers (name, subject, phone)
-            VALUES (?, ?, ?)
-        ''', (request.form['name'], request.form['subject'], request.form['phone']))
-        conn.commit()
-        flash('Teacher added successfully!', 'success')
-    
-    if request.args.get('delete'):
-        conn.execute('DELETE FROM teachers WHERE id = ?', (request.args['delete'],))
-        conn.commit()
-        flash('Teacher deleted successfully!', 'success')
-    
-    teachers_list = conn.execute('''
-        SELECT * FROM teachers ORDER BY created_at DESC
-    ''').fetchall()
+    teachers_df = pd.read_sql_query("SELECT * FROM teachers ORDER BY created_at DESC", conn)
     conn.close()
     
-    return render_template_string(f"""
-    {CSS_STYLES}
-    {NAVBAR}
-    <div class="container">
-        <div class="card">
-            <h2>👨‍🏫 Teacher Management</h2>
-            
-            {% with messages = get_flashed_messages(with_categories=true) %}
-                {% if messages %}
-                    {% for category, message in messages %}
-                        <div class="alert alert-{{ 'success' if category == 'success' else 'danger' }}">{{ message }}</div>
-                    {% endfor %}
-                {% endif %}
-            {% endwith %}
-            
-            <!-- Add Teacher Form -->
-            <form method="POST" style="margin-bottom: 2rem; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
-                <div class="form-group">
-                    <label>Name</label>
-                    <input type="text" name="name" required>
-                </div>
-                <div class="form-group">
-                    <label>Subject</label>
-                    <input type="text" name="subject" required>
-                </div>
-                <div class="form-group">
-                    <label>Phone</label>
-                    <input type="text" name="phone">
-                </div>
-                <button type="submit" class="btn">➕ Add Teacher</button>
-            </form>
-            
-            <!-- Teachers Table -->
-            <table class="table">
-                <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>Name</th>
-                        <th>Subject</th>
-                        <th>Phone</th>
-                        <th>Date Added</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for teacher in teachers_list %}
-                    <tr>
-                        <td>{{ teacher['id'] }}</td>
-                        <td>{{ teacher['name'] }}</td>
-                        <td>{{ teacher['subject'] }}</td>
-                        <td>{{ teacher['phone'] or 'N/A' }}</td>
-                        <td>{{ teacher['created_at'][:10] }}</td>
-                        <td>
-                            <a href="?delete={{ teacher['id'] }}" 
-                               class="btn btn-danger" 
-                               style="padding: 6px 12px; font-size: 14px;"
-                               onclick="return confirm('Delete {{ teacher['name'] }}?')">🗑️ Delete</a>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </div>
-    """, teachers_list
+    if not teachers_df.empty:
+        st.subheader(f"📋 {len(teachers_df)} Teachers")
+        st.dataframe(teachers_df, use_container_width=True)
+        
+        selected = st.multiselect("Select Teacher IDs to delete:", teachers_df['id'].tolist())
+        if st.button("🗑️ Delete Selected", type="primary", use_container_width=True) and selected:
+            conn = get_db_connection()
+            for teacher_id in selected:
+                conn.execute('DELETE FROM teachers WHERE id = ?', (teacher_id,))
+            conn.commit()
+            conn.close()
+            st.success(f"Deleted {len(selected)} teachers!")
+            st.rerun()
+    else:
+        st.info("No teachers found. Add some! 👆")
+
+def fees_page():
+    st.header("💰 Fee Management")
+    
+    conn = get_db_connection()
+    students = conn.execute('SELECT id, name FROM students').fetchall()
+    conn.close()
+    
+    # Add Fee
+    with st.expander("➕ Generate Fee Record", expanded=True):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            student_id = st.selectbox("Student", [""] + [(s['id'], s['name']) for s in students])
+            student_id = student_id[0] if isinstance(student_id, tuple) else student_id
+        with col2:
+            month = st.selectbox("Month", ["January", "February", "March", "April", "May", "June",
+                                         "July", "August", "September", "October", "November", "December"])
+            year = st.number_input("Year", value=datetime.now().year, min_value=2020)
+        with col3:
+            amount = st.number_input("Amount (₹)", min_value=0.0, value=5000.0, step=100.0)
+        
+        col4, col5 = st.columns(2)
+        with col4:
+            if st.button("💾 Generate Fee", use_container_width=True):
+                if student_id:
+                    conn = get_db_connection()
+                    conn.execute('INSERT INTO fees (student_id, month, year, amount) VALUES (?, ?, ?, ?)',
+                               (student_id, month, year, amount))
+                    conn.commit()
+                    conn.close()
+                    st.success("Fee record created! 🎉")
+                    st.rerun()
+    
+    # Fees Table
+    conn = get_db_connection()
+    fees_df = pd.read_sql_query("""
+        SELECT f.*, s.name as student_name 
+        FROM fees f 
+        JOIN students s ON f.student_id = s.id 
+        ORDER BY f.created_at DESC
+    """, conn)
+    conn.close()
+    
+    if not fees_df.empty:
+        st.subheader(f"📋 {len(fees_df)} Fee Records")
+        
+        # Fee Status Update
+        status_col = st.columns([3,1,1])
+        with status_col[1]:
+            if st.button("✅ Mark Paid", use_container_width=True):
+                pass  # Add logic here
+        with status_col[2]:
+            if st.button("❌ Mark Unpaid", use_container_width=True):
+                pass  # Add logic here
+        
+        st.dataframe(fees_df, use_container_width=True)
+    else:
+        st.info("No fee records. Generate some! 👆")
+
+def salary_page():
+    st.header("💼 Salary Management")
+    
+    conn = get_db_connection()
+    teachers = conn.execute('SELECT id, name FROM teachers').fetchall()
+    conn.close()
+    
+    # Add Salary
+    with st.expander("➕ Add Salary Record", expanded=True):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            teacher_id = st.selectbox("Teacher", [""] + [(t['id'], t['name']) for t in teachers])
+            teacher_id = teacher_id[0] if isinstance(teacher_id, tuple) else teacher_id
+        with col2:
+            month = st.selectbox("Month", ["January", "February", "March", "April", "May", "June",
+                                         "July", "August", "September", "October", "November", "December"])
+            year = st.number_input("Year", value=datetime.now().year, min_value=2020)
+        with col3:
+            amount = st.number_input("Salary (₹)", min_value=0.0, value=25000.0, step=1000.0)
+        
+        if st.button("💾 Add Salary", use_container_width=True):
+            if teacher_id:
+                conn = get_db_connection()
+                conn.execute('INSERT INTO salary (teacher_id, month, year, amount) VALUES (?, ?, ?, ?)',
+                           (teacher_id, month, year, amount))
+                conn.commit()
+                conn.close()
+                st.success("Salary record added! 🎉")
+                st.rerun()
+    
+    # Salary Table
+    conn = get_db_connection()
+    salary_df = pd.read_sql_query("""
+        SELECT s.*, t.name as teacher_name 
+        FROM salary s 
+        JOIN teachers t ON s.teacher_id = t.id 
+        ORDER BY s.created_at DESC
+    """, conn)
+    conn.close()
+    
+    if not salary_df.empty:
+        st.subheader(f"📋 {len(salary_df)} Salary Records")
+        st.dataframe(salary_df, use_container_width=True)
+    else:
+        st.info("No salary records. Add some! 👆")
+
+# Navigation
+page = st.sidebar.selectbox(
+    "Choose Page",
+    ["📊 Dashboard", "👨‍🎓 Students", "👨‍🏫 Teachers", "💰 Fees", "💼 Salary"]
+)
+
+# Logout
+if st.sidebar.button("🚪 Logout"):
+    st.session_state.logged_in = False
+    st.rerun()
+
+# Render pages
+if page == "📊 Dashboard":
+    dashboard()
+elif page == "👨‍🎓 Students":
+    students_page()
+elif page == "👨‍🏫 Teachers":
+    teachers_page()
+elif page == "💰 Fees":
+    fees_page()
+elif page == "💼 Salary":
+    salary_page()
+
+# Footer
+st.markdown("---")
+st.markdown("🏫 **School LMS** - Built with Streamlit | Data persists in SQLite")
